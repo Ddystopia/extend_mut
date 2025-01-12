@@ -34,6 +34,20 @@ fn abort_no_unwind(msg: &'static str) -> ! {
     panic!("{msg}");
 }
 
+fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
+    struct DoublePanic;
+    impl Drop for DoublePanic {
+        fn drop(&mut self) {
+            panic!("ExtendMut: Function cannot unwind");
+        }
+    }
+
+    let double_panic = DoublePanic;
+    let ret = f();
+    core::mem::forget(double_panic);
+    ret
+}
+
 // SAFETY:
 //     if `'a` is >= `'b`, then is is safe by [extend_mut_proof_for_smaller] proof.
 //     if `f` will diverge, `'a` will be `'static`, which is valid.
@@ -71,7 +85,7 @@ pub fn extend_mut<'a, 'b, T: 'b, R>(
     f: impl FnOnce(&'b mut T) -> (&'b mut T, R),
 ) -> R {
     let ptr = ptr::from_mut(mut_ref);
-    let (extended, next) = f(unsafe { &mut *ptr });
+    let (extended, next) = abort_on_unwind(move || f(unsafe { &mut *ptr }));
     if ptr != ptr::from_mut(extended) {
         abort_no_unwind("ExtendMut: Pointer changed");
     }
@@ -114,8 +128,9 @@ where
             return Poll::Pending;
         }
 
-        match this.future.poll(cx) {
+        match abort_on_unwind(move || this.future.poll(cx)) {
             Poll::Ready((extended, ret)) => {
+
                 if ptr == ptr::from_mut(extended) {
                     *this.ready = true;
                     Poll::Ready(ret)
