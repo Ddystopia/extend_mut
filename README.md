@@ -1,6 +1,8 @@
 # extend-mut
 
----
+[![docs.rs](https://docs.rs/extend_mut/badge.svg)](https://docs.rs/extend_mut)
+[![crates.io](https://img.shields.io/crates/v/extend_mut.svg)](https://crates.io/crates/extend_mut)
+<!-- [![crates.io](https://img.shields.io/crates/d/extend_mut.svg)](https://crates.io/crates/extend_mut) -->
 
 `extend-mut` is a `#![no_std]` Rust crate that provides safe and unsafe
 utilities to extend the lifetime of an exclusive mutable reference (`&mut`). It
