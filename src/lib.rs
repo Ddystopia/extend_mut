@@ -19,11 +19,26 @@ use core::{
     task::{Context, Poll},
 };
 
+pub trait IntoExtendMutReturn<'a, T, R> {
+    fn into_extend_mut_return(self) -> (&'a mut T, R);
+}
+
+impl<'a, T, R> IntoExtendMutReturn<'a, T, R> for (&'a mut T, R) {
+    fn into_extend_mut_return(self) -> (&'a mut T, R) {
+        self
+    }
+}
+
+impl<'a, T> IntoExtendMutReturn<'a, T, ()> for &'a mut T {
+    fn into_extend_mut_return(self) -> (&'a mut T, ()) {
+        (self, ())
+    }
+}
+
 // With `panic=abort` it will directly go to panic handler without unwind.
 // With `panic=unwind` it will painc-in-drop, which will cause panic_nounwind.
 fn abort_no_unwind(msg: &'static str) -> ! {
     struct DoublePanic(&'static str);
-
     impl Drop for DoublePanic {
         fn drop(&mut self) {
             panic!("{}", self.0);
@@ -62,7 +77,7 @@ fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
 
 /// Extends the lifetime of a mutable reference. Note that `f` must return the same reference
 /// that was passed to it, otherwise it will abort the process.
-/// Note that you can still use this in async context, if you will call it on 
+/// Note that you can still use this in async context, if you will call it on
 /// every poll, instead of on future creation (see [`poll_fn`](core::future::poll_fn)).
 /// ```
 /// use extend_mut::extend_mut;
@@ -80,12 +95,14 @@ fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
 /// assert_eq!(r, 6);
 /// assert_eq!(x, 7);
 /// ```
-pub fn extend_mut<'a, 'b, T: 'b, R>(
-    mut_ref: &'a mut T,
-    f: impl FnOnce(&'b mut T) -> (&'b mut T, R),
-) -> R {
+pub fn extend_mut<'a, 'b, T: 'b, F, R, ExtR>(mut_ref: &'a mut T, f: F) -> R
+where
+    F: FnOnce(&'b mut T) -> ExtR,
+    ExtR: IntoExtendMutReturn<'b, T, R>,
+{
     let ptr = ptr::from_mut(mut_ref);
-    let (extended, next) = abort_on_unwind(move || f(unsafe { &mut *ptr }));
+    let ret = abort_on_unwind(move || f(unsafe { &mut *ptr }));
+    let (extended, next) = ret.into_extend_mut_return();
     if ptr != ptr::from_mut(extended) {
         abort_no_unwind("ExtendMut: Pointer changed");
     }
@@ -96,16 +113,16 @@ pub fn extend_mut<'a, 'b, T: 'b, R>(
 pin_project_lite::pin_project! {
     /// Future returned by returned by [extend_mut_async].
     /// Consult it's documentation for more information and safety requirements.
-    pub struct ExtendMutFuture<'a, T, Fut, R> {
+    pub struct ExtendMutFuture<'a, T, Fut, R, ExtR> {
         ptr: *mut T,
-        marker: core::marker::PhantomData<(&'a mut T, R)>,
+        marker: core::marker::PhantomData<(&'a mut T, R, ExtR)>,
         #[pin]
         future: Fut,
         // Instead of having that bool, we might make `ptr` null.
         ready: bool,
     }
 
-    impl<'a, T, Fut, R> PinnedDrop for ExtendMutFuture<'a, T, Fut, R> {
+    impl<'a, T, Fut, R, ExtR> PinnedDrop for ExtendMutFuture<'a, T, Fut, R, ExtR> {
         fn drop(this: Pin<&mut Self>) {
             if !*this.project().ready {
                 abort_no_unwind("Cannot drop ExtendMutFuture before it yields Poll::Ready");
@@ -114,9 +131,10 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'a, T, Fut, R> Future for ExtendMutFuture<'a, T, Fut, R>
+impl<'a, T, Fut, R, ExdR> Future for ExtendMutFuture<'a, T, Fut, R, ExdR>
 where
-    Fut: Future<Output = (&'a mut T, R)>,
+    ExdR: IntoExtendMutReturn<'a, T, R>,
+    Fut: Future<Output = ExdR>,
 {
     type Output = R;
 
@@ -129,7 +147,8 @@ where
         }
 
         match abort_on_unwind(move || this.future.poll(cx)) {
-            Poll::Ready((extended, ret)) => {
+            Poll::Ready(ret) => {
+                let (extended, ret) = ret.into_extend_mut_return();
 
                 if ptr == ptr::from_mut(extended) {
                     *this.ready = true;
@@ -157,12 +176,13 @@ where
 /// by any means, including [forget](core::mem::forget), [`ManuallyDrop`](core::mem::ManuallyDrop) etc. Otherwise,
 /// borrow checker will allow you to use `mut_ref` while it might be used by `f`, which will
 /// be undefined behavior.
-pub unsafe fn extend_mut_async<'a, 'b, T: 'b, F, Fut, R>(
+pub unsafe fn extend_mut_async<'a, 'b, T: 'b, F, Fut, R, ExdR>(
     mut_ref: &'a mut T,
     f: F,
-) -> ExtendMutFuture<'b, T, Fut, R>
+) -> ExtendMutFuture<'b, T, Fut, R, ExdR>
 where
-    Fut: Future<Output = (&'b mut T, R)>,
+    ExdR: IntoExtendMutReturn<'b, T, R>,
+    Fut: Future<Output = ExdR>,
     F: FnOnce(&'b mut T) -> Fut,
 {
     let ptr = ptr::from_mut(mut_ref);
@@ -199,8 +219,7 @@ mod test {
             x
         }
 
-        let r = extend_mut(&mut x, |x| (want_static(x), 6));
-        assert_eq!(r, 6);
+        extend_mut(&mut x, |x| want_static(x));
         assert_eq!(x, 7);
     }
 
