@@ -150,3 +150,87 @@ fn extend_mut_proof_for_smaller<'a: 'b, 'b, T: 'b, R>(
 ) -> R {
     f(mut_ref).1
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_extend_mut() {
+        let mut x = 5;
+
+        fn want_static(x: &'static mut i32) -> &'static mut i32 {
+            assert_eq!(*x, 5);
+            *x += 1;
+            *x += 1;
+            x
+        }
+
+        let r = extend_mut(&mut x, |x| (want_static(x), 6));
+        assert_eq!(r, 6);
+        assert_eq!(x, 7);
+    }
+
+    #[test]
+    fn test_extend_mut_async_immediate() {
+        use core::pin::pin;
+        use core::task::{Context, Poll, Waker};
+
+        let mut x = 5;
+        async fn want_static(x: &'static mut i32) -> &'static mut i32 {
+            assert_eq!(*x, 5);
+            x
+        }
+
+        let fut = unsafe { extend_mut_async(&mut x, async |x| (want_static(x).await, 8)) };
+        let mut fut = pin!(fut);
+        let ret = loop {
+            match fut.as_mut().poll(&mut Context::from_waker(&Waker::noop())) {
+                Poll::Ready(ret) => break ret,
+                Poll::Pending => panic!(),
+            }
+        };
+
+        assert_eq!(ret, 8);
+    }
+
+    #[test]
+    fn test_extend_mut_async_yielding() {
+        use core::pin::pin;
+        use core::task::{Context, Poll, Waker};
+
+        let mut x = 5;
+
+        async fn want_static(x: &'static mut i32) -> &'static mut i32 {
+            let mut i = 0;
+
+            let yield_fn = core::future::poll_fn(|cx| {
+                *x += 1;
+
+                if i == 20 {
+                    return Poll::Ready(());
+                } else {
+                    i += 1;
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+            });
+
+            yield_fn.await;
+
+            x
+        }
+
+        let fut = unsafe { extend_mut_async(&mut x, async |x| (want_static(x).await, 8)) };
+        let mut fut = pin!(fut);
+        let ret = loop {
+            match fut.as_mut().poll(&mut Context::from_waker(&Waker::noop())) {
+                Poll::Ready(ret) => break ret,
+                Poll::Pending => continue,
+            }
+        };
+
+        assert_eq!(ret, 8);
+        assert_eq!(x, 26);
+    }
+}
