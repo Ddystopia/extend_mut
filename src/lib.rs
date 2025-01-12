@@ -75,25 +75,31 @@ fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
 //           we verify it by an assertion.
 //     else we know that `f` did not store the reference we gave it, so it is sound.
 
-/// Extends the lifetime of a mutable reference. Note that `f` must return the same reference
+/// Extends the lifetime of a mutable reference. `f` must return the same reference
 /// that was passed to it, otherwise it will abort the process.
-/// Note that you can still use this in async context, if you will call it on
-/// every poll, instead of on future creation (see [`poll_fn`](core::future::poll_fn)).
+/// You can still use this in async context, if you will call it on every poll,
+/// instead of on future creation (see [`poll_fn`](core::future::poll_fn)).
+///
+/// You can return either `&'b mut T` or `(&'b mut T, R)` from `f`.
+///
 /// ```
 /// use extend_mut::extend_mut;
 ///
 /// let mut x = 5;
 ///
 /// fn want_static(x: &'static mut i32) -> &'static mut i32 {
-///     assert_eq!(*x, 5);
+///     assert!(*x == 5 || *x == 7);
 ///     *x += 1;
 ///     *x += 1;
 ///     x
 /// }
 ///
-/// let r = extend_mut(&mut x, |x| (want_static(x), 6));
-/// assert_eq!(r, 6);
+/// let r = extend_mut(&mut x, |x| (want_static(x), "return value"));
+/// assert_eq!(r, "return value");
 /// assert_eq!(x, 7);
+///
+/// extend_mut(&mut x, |x| want_static(x));
+/// assert_eq!(x, 9);
 /// ```
 pub fn extend_mut<'a, 'b, T: 'b, F, R, ExtR>(mut_ref: &'a mut T, f: F) -> R
 where
@@ -167,6 +173,8 @@ where
 /// cancel-safe.
 ///
 /// If polled after yielding [`Poll::Ready`], it will always return [`Poll::Pending`].
+///
+/// You can return either `&'b mut T` or `(&'b mut T, R)` from `f`.
 ///
 /// # Safety
 ///
@@ -273,16 +281,15 @@ mod test {
             x
         }
 
-        let fut = unsafe { extend_mut_async(&mut x, async |x| (want_static(x).await, 8)) };
+        let fut = unsafe { extend_mut_async(&mut x, async |x| want_static(x).await) };
         let mut fut = pin!(fut);
-        let ret = loop {
+        () = loop {
             match fut.as_mut().poll(&mut Context::from_waker(&Waker::noop())) {
                 Poll::Ready(ret) => break ret,
                 Poll::Pending => continue,
             }
         };
 
-        assert_eq!(ret, 8);
         assert_eq!(x, 26);
     }
 }
