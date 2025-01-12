@@ -8,6 +8,7 @@ documentation = "https://docs.rs/extend_mut"
 repository = "https://github.com/Ddystopia/extend_mut"
 license = "MIT OR Apache-2.0"
 authors = ["Ddystopia <alexanderbabak@proton.me>"]
+keywords = ["no_std", "borrowck", "async", "loans", "borrow", "static", "extend", "api", "abstraction", "channel", "erase"]
 
 [dependencies]
 pin-project-lite = "0.2.16"

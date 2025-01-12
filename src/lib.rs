@@ -48,6 +48,24 @@ fn abort_no_unwind(msg: &'static str) -> ! {
 
 /// Extends the lifetime of a mutable reference. Note that `f` must return the same reference
 /// that was passed to it, otherwise it will abort the process.
+/// Note that you can still use this in async context, if you will call it on 
+/// every poll, instead of on future creation (see [`poll_fn`](core::future::poll_fn)).
+/// ```
+/// use extend_mut::extend_mut;
+///
+/// let mut x = 5;
+///
+/// fn want_static(x: &'static mut i32) -> &'static mut i32 {
+///     assert_eq!(*x, 5);
+///     *x += 1;
+///     *x += 1;
+///     x
+/// }
+///
+/// let r = extend_mut(&mut x, |x| (want_static(x), 6));
+/// assert_eq!(r, 6);
+/// assert_eq!(x, 7);
+/// ```
 pub fn extend_mut<'a, 'b, T: 'b, R>(
     mut_ref: &'a mut T,
     f: impl FnOnce(&'b mut T) -> (&'b mut T, R),
