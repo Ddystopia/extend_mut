@@ -1,10 +1,10 @@
-# extend-mut
+# extend_mut
 
 [![docs.rs](https://docs.rs/extend_mut/badge.svg)](https://docs.rs/extend_mut)
 [![crates.io](https://img.shields.io/crates/v/extend_mut.svg)](https://crates.io/crates/extend_mut)
 <!-- [![crates.io](https://img.shields.io/crates/d/extend_mut.svg)](https://crates.io/crates/extend_mut) -->
 
-`extend-mut` is a `#![no_std]` Rust crate that provides safe and unsafe
+`extend_mut` is a `#![no_std]` Rust crate that provides safe and unsafe
 utilities to extend the lifetime of an exclusive mutable reference (`&mut`). It
 includes both synchronous and asynchronous methods for achieving this, with a
 focus on correctness and safety guarantees around mutable reference lifetimes.
@@ -18,11 +18,11 @@ focus on correctness and safety guarantees around mutable reference lifetimes.
   lifetime of a mutable reference in an `async` context. This function comes
   with important safety considerations.
 
-## Why Use `extend-mut`?
+## Why Use `extend_mut`?
 
 Rust's borrow checker enforces strict lifetime rules to ensure memory safety.
 However, there are scenarios where you may need to work around lifetime
-limitations in a controlled way. `extend-mut` provides a way to extend the
+limitations in a controlled way. `extend_mut` provides a way to extend the
 lifetime of mutable references safely and correctly, without introducing
 undefined behavior.
 
@@ -35,15 +35,13 @@ and then take back the control, take back `&'static mut` and recover original li
 - `#![no_std]` support: This crate is compatible with `#![no_std]` environments,
   making it suitable for embedded and constrained systems.
 
----
-
 ## Usage
 
-Add `extend-mut` to your `Cargo.toml`:
+Add `extend_mut` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-extend-mut = "0.1"
+extend_mut = "0.2"
 ```
 
 ### Synchronous Example
@@ -59,10 +57,16 @@ fn main() {
         x
     }
 
+    extend_mut(&mut x, |x| modify_static(x));
+    assert_eq!(x, 6);
+
+    extend_mut(&mut x, modify_static);
+    assert_eq!(x, 7);
+
     let result = extend_mut(&mut x, |x| (modify_static(x), 42));
 
     assert_eq!(result, 42);
-    assert_eq!(x, 6);
+    assert_eq!(x, 8);
 }
 ```
 
@@ -70,7 +74,6 @@ fn main() {
 
 `extend_mut` is designed to be safe, while `extend_mut_async` is inherently
 unsafe due to the lack of linear types in Rust. When using `extend_mut_async`,
-ensure that the returned future is fully awaited before being dropped. Violating
-this requirement will cause the process to abort.
+ensure that the returned future is fully awaited before being dropped.
 
 
