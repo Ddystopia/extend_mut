@@ -19,6 +19,10 @@ use core::{
     task::{Context, Poll},
 };
 
+// #![feature(generic_const_exprs)]
+// trait NotZst: Sized {}
+// impl<T> NotZst for T where [(); size_of::<T>() - 1]: Sized {}
+
 pub trait IntoExtendMutReturn<'a, T, R> {
     fn into_extend_mut_return(self) -> (&'a mut T, R);
 }
@@ -71,8 +75,10 @@ fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
 //
 //     if `f` stored `&'b mut T`, then
 //         if `f` diverged, it is fine, because `'a` becomes `'static`.
-//         else `f` must return `&'b mut T` different from the one it stored.
-//           we verify it by an assertion.
+//         else `f` must return `&'b mut T`
+//           if `T` is not zst then returned `&'b mut T` is different from the one it stored.
+//               we verify it by runtime assertion.
+//           if `T` is zst then we remove this case by compile-time assertion.
 //     else we know that `f` did not store the reference we gave it, so it is sound.
 
 /// Extends the lifetime of a mutable reference. `f` must return the same reference
@@ -106,6 +112,8 @@ where
     F: FnOnce(&'b mut T) -> ExtR,
     ExtR: IntoExtendMutReturn<'b, T, R>,
 {
+    const { assert!(core::mem::size_of::<T>() != 0) };
+
     let ptr = ptr::from_mut(mut_ref);
     let ret = abort_on_unwind(move || f(unsafe { &mut *ptr }));
     let (extended, next) = ret.into_extend_mut_return();
@@ -193,6 +201,8 @@ where
     Fut: Future<Output = ExdR>,
     F: FnOnce(&'b mut T) -> Fut,
 {
+    const { assert!(core::mem::size_of::<T>() != 0) };
+
     let ptr = ptr::from_mut(mut_ref);
     let future = f(unsafe { &mut *ptr });
 
