@@ -142,7 +142,7 @@ where
     F: FnOnce(&'b mut T) -> ExtR,
     ExtR: IntoExtendMutReturn<'b, T, R>,
 {
-    const { assert!(core::mem::size_of::<T>() != 0) };
+    const { assert!(size_of::<T>() != 0) };
 
     let ptr = ptr::from_mut(mut_ref);
     let ret = abort_on_unwind(move || f(unsafe { &mut *ptr }));
@@ -231,7 +231,7 @@ where
     Fut: Future<Output = ExdR>,
     F: FnOnce(&'b mut T) -> Fut,
 {
-    const { assert!(core::mem::size_of::<T>() != 0) };
+    const { assert!(size_of::<T>() != 0) };
 
     let ptr = ptr::from_mut(mut_ref);
     let future = f(unsafe { &mut *ptr });
