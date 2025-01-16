@@ -9,7 +9,7 @@ utilities to extend the lifetime of an exclusive mutable reference (`&mut`). It
 includes both synchronous and asynchronous methods for achieving this, with a
 focus on correctness and safety guarantees around mutable reference lifetimes.
 
-## Features
+## API
 
 - **`extend_mut`**: A synchronous function that safely extends the lifetime of a
   mutable reference using a sync closure. Note that you can still use this in
@@ -26,7 +26,7 @@ limitations in a controlled way. `extend_mut` provides a way to extend the
 lifetime of mutable references safely and correctly, without introducing
 undefined behavior.
 
-A commom use case is crating a temporary `&'static mut` reference to send
+A commom use case is creating a temporary `&'static mut` reference to send
 somewhere, give execution control to other function that expects `&'static mut`,
 and then take back the control, take back `&'static mut` and recover original lifetime.
 
@@ -34,15 +34,6 @@ and then take back the control, take back `&'static mut` and recover original li
 
 - `#![no_std]` support: This crate is compatible with `#![no_std]` environments,
   making it suitable for embedded and constrained systems.
-
-## Usage
-
-Add `extend_mut` to your `Cargo.toml`:
-
-```toml
-[dependencies]
-extend_mut = "0.2"
-```
 
 ### Synchronous Example
 
