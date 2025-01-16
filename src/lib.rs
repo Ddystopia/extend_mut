@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
 /*!
 
@@ -12,6 +12,8 @@ a linear type be safe - but Rust does not have linear types yet, so it is unsafe
 
 */
 
+#[cfg(feature = "std")]
+use core::panic::AssertUnwindSafe;
 use core::{
     future::Future,
     pin::Pin,
@@ -45,8 +47,7 @@ impl<'a, T> IntoExtendMutReturn<'a, T, ()> for &'a mut T {
     }
 }
 
-// With `panic=abort` it will directly go to panic handler without unwind.
-// With `panic=unwind` it will painc-in-drop, which will cause panic_nounwind.
+#[cfg(not(feature = "std"))]
 fn abort_no_unwind(msg: &'static str) -> ! {
     struct DoublePanic(&'static str);
     impl Drop for DoublePanic {
@@ -56,10 +57,22 @@ fn abort_no_unwind(msg: &'static str) -> ! {
     }
 
     let _double_panic = DoublePanic(msg);
+    // If panic=abort, `msg` will be directly delivered to the panic handler, no double panic.
+    // If panic=unwind, we will force double panic. This is mostly not needed for no_std.
     panic!("{msg}");
 }
 
+#[cfg(feature = "std")]
+fn abort_no_unwind(msg: &'static str) -> ! {
+    eprintln!("{}", msg);
+    std::process::abort();
+}
+
+#[cfg(not(feature = "std"))]
 fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
+    // If panic=abort, after panic `f` will go directly to the panic handler.
+    // If panic=unwind, we will force double panic. This is mostly not needed for no_std.
+
     struct DoublePanic;
     impl Drop for DoublePanic {
         fn drop(&mut self) {
@@ -71,6 +84,15 @@ fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
     let ret = f();
     core::mem::forget(double_panic);
     ret
+}
+
+#[cfg(feature = "std")]
+fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(ret) => ret,
+        // fixme: how can we print error? It is just `Box<dyn Any + Send>`.
+        Err(_err) => abort_no_unwind("ExtendMut: Function cannot unwind"),
+    }
 }
 
 // SAFETY:
@@ -99,19 +121,21 @@ fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
 ///
 /// let mut x = 5;
 ///
-/// fn want_static(x: &'static mut i32) -> &'static mut i32 {
-///     assert!(*x == 5 || *x == 7);
-///     *x += 1;
+/// fn modify_static(x: &'static mut i32) -> &'static mut i32 {
 ///     *x += 1;
 ///     x
 /// }
 ///
-/// let r = extend_mut(&mut x, |x| (want_static(x), "return value"));
-/// assert_eq!(r, "return value");
+/// extend_mut(&mut x, |x| modify_static(x));
+/// assert_eq!(x, 6);
+///
+/// extend_mut(&mut x, modify_static);
 /// assert_eq!(x, 7);
 ///
-/// extend_mut(&mut x, |x| want_static(x));
-/// assert_eq!(x, 9);
+/// let result = extend_mut(&mut x, |x| (modify_static(x), 42));
+///
+/// assert_eq!(result, 42);
+/// assert_eq!(x, 8);
 /// ```
 pub fn extend_mut<'a, 'b, T: 'b, F, R, ExtR>(mut_ref: &'a mut T, f: F) -> R
 where

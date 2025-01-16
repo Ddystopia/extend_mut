@@ -12,3 +12,7 @@ keywords = ["no_std", "borrowck", "async", "lifetime", "static"]
 
 [dependencies]
 pin-project-lite = "0.2.16"
+
+[features]
+default = ["std"]
+std = []
