@@ -19,11 +19,17 @@ use core::{
     task::{Context, Poll},
 };
 
+mod seal {
+    pub trait Sealed {}
+    impl<'a, T> Sealed for &'a mut T {}
+    impl<'a, T, R> Sealed for (&'a mut T, R) {}
+}
+
 // #![feature(generic_const_exprs)]
 // trait NotZst: Sized {}
 // impl<T> NotZst for T where [(); size_of::<T>() - 1]: Sized {}
 
-pub trait IntoExtendMutReturn<'a, T, R> {
+pub trait IntoExtendMutReturn<'a, T, R>: seal::Sealed {
     fn into_extend_mut_return(self) -> (&'a mut T, R);
 }
 
