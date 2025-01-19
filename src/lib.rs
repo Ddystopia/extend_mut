@@ -12,8 +12,6 @@ a linear type be safe - but Rust does not have linear types yet, so it is unsafe
 
 */
 
-#[cfg(feature = "std")]
-use core::panic::AssertUnwindSafe;
 use core::{
     future::Future,
     pin::Pin,
@@ -21,78 +19,44 @@ use core::{
     task::{Context, Poll},
 };
 
-mod seal {
-    pub trait Sealed {}
-    impl<'a, T> Sealed for &'a mut T {}
-    impl<'a, T, R> Sealed for (&'a mut T, R) {}
+use aborts::{abort_no_unwind, abort_on_unwind};
+
+mod aborts;
+mod impls;
+
+/// Trait designed to allow extending the lifetime of a mutable reference.
+/// It does not currently support async, contributions are welcome.
+/// # Examples
+/// ```
+/// use extend_mut::ExtendMut;
+///
+/// let (mut t1, mut t2) = (1, 2);
+/// let () = (t1, t2).extend_mut(|it /*: &'static mut (u8, u8)*/| it);
+/// let () = (&mut t1, &mut t2).extend_mut(|it /*: (&'static mut u8, &'static mut u8)*/| it);
+/// let "hi" = (t1, t2).extend_mut(|it| (it, "hi")) else { panic!() };
+/// ````
+pub trait ExtendMut<'b>: Sized {
+    type Extended;
+    fn extend_mut<R, ER: IntoExtendMutReturn<Self::Extended, R>>(
+        self,
+        f: impl FnOnce(Self::Extended) -> ER,
+    ) -> R;
 }
 
-// #![feature(generic_const_exprs)]
-// trait NotZst: Sized {}
-// impl<T> NotZst for T where [(); size_of::<T>() - 1]: Sized {}
-
-pub trait IntoExtendMutReturn<'a, T, R>: seal::Sealed {
-    fn into_extend_mut_return(self) -> (&'a mut T, R);
+/// Trait designed to allow returning both `&mut T` and `(&mut T, R)`, as well
+/// as other uses.
+/// # Safety
+/// This implementation must not unwind
+pub unsafe trait IntoExtendMutReturn<T, R> {
+    fn into_extend_mut_return(self) -> (T, R);
 }
 
-impl<'a, T, R> IntoExtendMutReturn<'a, T, R> for (&'a mut T, R) {
-    fn into_extend_mut_return(self) -> (&'a mut T, R) {
-        self
-    }
-}
-
-impl<'a, T> IntoExtendMutReturn<'a, T, ()> for &'a mut T {
-    fn into_extend_mut_return(self) -> (&'a mut T, ()) {
-        (self, ())
-    }
-}
-
-#[cfg(not(feature = "std"))]
-fn abort_no_unwind(msg: &'static str) -> ! {
-    struct DoublePanic(&'static str);
-    impl Drop for DoublePanic {
-        fn drop(&mut self) {
-            panic!("{}", self.0);
-        }
-    }
-
-    let _double_panic = DoublePanic(msg);
-    // If panic=abort, `msg` will be directly delivered to the panic handler, no double panic.
-    // If panic=unwind, we will force double panic. This is mostly not needed for no_std.
-    panic!("{msg}");
-}
-
-#[cfg(feature = "std")]
-fn abort_no_unwind(msg: &'static str) -> ! {
-    eprintln!("{}", msg);
-    std::process::abort();
-}
-
-#[cfg(not(feature = "std"))]
-fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
-    // If panic=abort, after panic `f` will go directly to the panic handler.
-    // If panic=unwind, we will force double panic. This is mostly not needed for no_std.
-
-    struct DoublePanic;
-    impl Drop for DoublePanic {
-        fn drop(&mut self) {
-            panic!("ExtendMut: Function cannot unwind");
-        }
-    }
-
-    let double_panic = DoublePanic;
-    let ret = f();
-    core::mem::forget(double_panic);
-    ret
-}
-
-#[cfg(feature = "std")]
-fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
-    match std::panic::catch_unwind(AssertUnwindSafe(f)) {
-        Ok(ret) => ret,
-        // fixme: how can we print error? It is just `Box<dyn Any + Send>`.
-        Err(_err) => abort_no_unwind("ExtendMut: Function cannot unwind"),
-    }
+#[allow(dead_code)]
+fn extend_mut_proof_for_smaller<'a: 'b, 'b, T: 'b, R>(
+    mut_ref: &'a mut T,
+    f: impl FnOnce(&'b mut T) -> (&'b mut T, R),
+) -> R {
+    f(mut_ref).1
 }
 
 // SAFETY:
@@ -137,15 +101,19 @@ fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
 /// assert_eq!(result, 42);
 /// assert_eq!(x, 8);
 /// ```
+#[inline(always)]
 pub fn extend_mut<'a, 'b, T: 'b, F, R, ExtR>(mut_ref: &'a mut T, f: F) -> R
 where
     F: FnOnce(&'b mut T) -> ExtR,
-    ExtR: IntoExtendMutReturn<'b, T, R>,
+    ExtR: IntoExtendMutReturn<&'b mut T, R>,
 {
     const { assert!(size_of::<T>() != 0) };
 
     let ptr = ptr::from_mut(mut_ref);
-    let ret = abort_on_unwind(move || f(unsafe { &mut *ptr }));
+    let ret = abort_on_unwind(
+        #[inline(always)]
+        move || f(unsafe { &mut *ptr }),
+    );
     let (extended, next) = ret.into_extend_mut_return();
     if ptr != ptr::from_mut(extended) {
         abort_no_unwind("ExtendMut: Pointer changed");
@@ -157,16 +125,16 @@ where
 pin_project_lite::pin_project! {
     /// Future returned by returned by [extend_mut_async].
     /// Consult it's documentation for more information and safety requirements.
-    pub struct ExtendMutFuture<'a, T, Fut, R, ExtR> {
+    pub struct ExtendMutFuture<'b, T, Fut, R, ExtR> {
         ptr: *mut T,
-        marker: core::marker::PhantomData<(&'a mut T, R, ExtR)>,
+        marker: core::marker::PhantomData<(&'b mut T, R, ExtR)>,
         #[pin]
         future: Fut,
         // Instead of having that bool, we might make `ptr` null.
         ready: bool,
     }
 
-    impl<'a, T, Fut, R, ExtR> PinnedDrop for ExtendMutFuture<'a, T, Fut, R, ExtR> {
+    impl<'b, T, Fut, R, ExtR> PinnedDrop for ExtendMutFuture<'b, T, Fut, R, ExtR> {
         fn drop(this: Pin<&mut Self>) {
             if !*this.project().ready {
                 abort_no_unwind("Cannot drop ExtendMutFuture before it yields Poll::Ready");
@@ -175,13 +143,14 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'a, T, Fut, R, ExdR> Future for ExtendMutFuture<'a, T, Fut, R, ExdR>
+impl<'b, T, Fut, R, ExdR> Future for ExtendMutFuture<'b, T, Fut, R, ExdR>
 where
-    ExdR: IntoExtendMutReturn<'a, T, R>,
+    ExdR: IntoExtendMutReturn<&'b mut T, R>,
     Fut: Future<Output = ExdR>,
 {
     type Output = R;
 
+    #[inline(always)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         let ptr = *this.ptr;
@@ -190,7 +159,10 @@ where
             return Poll::Pending;
         }
 
-        match abort_on_unwind(move || this.future.poll(cx)) {
+        match abort_on_unwind(
+            #[inline(always)]
+            move || this.future.poll(cx),
+        ) {
             Poll::Ready(ret) => {
                 let (extended, ret) = ret.into_extend_mut_return();
 
@@ -227,7 +199,7 @@ pub unsafe fn extend_mut_async<'a, 'b, T: 'b, F, Fut, R, ExdR>(
     f: F,
 ) -> ExtendMutFuture<'b, T, Fut, R, ExdR>
 where
-    ExdR: IntoExtendMutReturn<'b, T, R>,
+    ExdR: IntoExtendMutReturn<&'b mut T, R>,
     Fut: Future<Output = ExdR>,
     F: FnOnce(&'b mut T) -> Fut,
 {
@@ -244,24 +216,50 @@ where
     }
 }
 
-#[allow(dead_code)]
-fn extend_mut_proof_for_smaller<'a: 'b, 'b, T: 'b, R>(
-    mut_ref: &'a mut T,
-    f: impl FnOnce(&'b mut T) -> (&'b mut T, R),
-) -> R {
-    f(mut_ref).1
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_sync_api() {
+        let (mut t1, mut t2, mut t3, mut t4) = (1, 2, 3, 4);
+
+        let () = extend_mut(&mut t1, |t1: &'static mut u8| t1);
+        let "hi" = extend_mut(&mut t1, |t1| (t1, "hi")) else { panic!() };
+        let () = extend_mut(&mut t1, |t1| (t1, ()));
+
+        let () = t1.extend_mut(|t1| t1);
+        let () = (&mut t1).extend_mut(|t1: &'static mut u8| t1);
+        let "hi" = t1.extend_mut(|t1| (t1, "hi")) else { panic!() };
+        let "hi" = (&mut t1).extend_mut(|t1| (t1, "hi")) else { panic!() };
+
+        let () = (t1, t2).extend_mut(|it: &'static mut (u8, u8)| it);
+        let () = (&mut t1, &mut t2).extend_mut(|it: (&'static mut u8, &'static mut u8)| it);
+        let () = (&mut (t1, t2)).extend_mut(|it: &'static mut (u8, u8)| it);
+        let "hi" = (t1, t2).extend_mut(|it| (it, "hi")) else { panic!() };
+        let "hi" = (&mut t1, &mut t2).extend_mut(|it| (it, "hi")) else { panic!() };
+        let "hi" = (&mut (t1, t2)).extend_mut(|it| (it, "hi")) else { panic!() };
+
+        let () = (t1, t2, t3).extend_mut(|it: &'static mut (u8, u8, u8)| it);
+        let () = (&mut t1, &mut t2, &mut t3).extend_mut(|it: (&'static mut u8, &'static mut u8, &mut u8)| it);
+        let "hi" = (t1, t2, t3).extend_mut(|it| (it, "hi")) else { panic!() };
+        let "hi" = (&mut t1, &mut t2, &mut t3).extend_mut(|it| (it, "hi")) else { panic!() };
+
+        let () = (t1, t2, t3, t4).extend_mut(|it: &'static mut (u8, u8, u8, u8)| it);
+        let () = (&mut t1, &mut t2, &mut t3, &mut t4).extend_mut(|it: (&mut u8, &mut u8, &mut u8, &mut u8)| it);
+        let "hi" = (t1, t2, t3, t4).extend_mut(|it| (it, "hi")) else { panic!() };
+        let "hi" = (&mut t1, &mut t2, &mut t3, &mut t4).extend_mut(|it| (it, "hi")) else { panic!() };
+
+        let () = <_>::extend_mut(&mut (t1, t2, t3, t4), |it: &'static mut (u8, u8, u8, u8)| it);
+        let () = <_>::extend_mut((&mut t1, &mut t2, &mut t3, &mut t4), |it| it);
+    }
 
     #[test]
     fn test_extend_mut() {
         let mut x = 5;
 
         fn want_static(x: &'static mut i32) -> &'static mut i32 {
-            assert_eq!(*x, 5);
             *x += 1;
             *x += 1;
             x
@@ -269,6 +267,18 @@ mod test {
 
         extend_mut(&mut x, |x| want_static(x));
         assert_eq!(x, 7);
+        let hi = x.extend_mut(|x| (want_static(x), "hi"));
+        assert_eq!(hi, "hi");
+        assert_eq!(x, 9);
+        x.extend_mut(want_static);
+        assert_eq!(x, 11);
+
+        let mut y = 7;
+        let mut z = 7;
+        let hi = <_>::extend_mut((&mut x, &mut y, &mut z), |(x, y, z)| {
+            ((want_static(x), y, z), "hi")
+        });
+        assert_eq!(hi, "hi");
     }
 
     #[test]

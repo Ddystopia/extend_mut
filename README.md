@@ -19,6 +19,44 @@ focus on correctness and safety guarantees around mutable reference lifetimes.
 - **`extend_mut_async`**: An asynchronous function that allows extending the
   lifetime of a mutable reference in an `async` context. This function comes
   with important safety considerations.
+- **`ExtendMut`**: A trait for `expr.extend_mut` syntax.
+
+## Usage
+
+Following snippet demonstrates the usage of `extend_mut` and `ExtendMut` trait:
+
+```rust
+let (mut t1, mut t2, mut t3, mut t4) = (1, 2, 3, 4);
+
+let () = extend_mut(&mut t1, |t1: &'static mut u8| t1);
+let "hi" = extend_mut(&mut t1, |t1| (t1, "hi")) else { panic!() };
+let () = extend_mut(&mut t1, |t1| (t1, ()));
+
+let () = t1.extend_mut(|t1| t1);
+let () = (&mut t1).extend_mut(|t1: &'static mut u8| t1);
+let "hi" = t1.extend_mut(|t1| (t1, "hi")) else { panic!() };
+let "hi" = (&mut t1).extend_mut(|t1| (t1, "hi")) else { panic!() };
+
+let () = (t1, t2).extend_mut(|it: &'static mut (u8, u8)| it);
+let () = (&mut t1, &mut t2).extend_mut(|it: (&'static mut u8, &'static mut u8)| it);
+let () = (&mut (t1, t2)).extend_mut(|it: &'static mut (u8, u8)| it);
+let "hi" = (t1, t2).extend_mut(|it| (it, "hi")) else { panic!() };
+let "hi" = (&mut t1, &mut t2).extend_mut(|it| (it, "hi")) else { panic!() };
+let "hi" = (&mut (t1, t2)).extend_mut(|it| (it, "hi")) else { panic!() };
+
+let () = (t1, t2, t3).extend_mut(|it: &'static mut (u8, u8, u8)| it);
+let () = (&mut t1, &mut t2, &mut t3).extend_mut(|it: (&'static mut u8, &'static mut u8, &mut u8)| it);
+let "hi" = (t1, t2, t3).extend_mut(|it| (it, "hi")) else { panic!() };
+let "hi" = (&mut t1, &mut t2, &mut t3).extend_mut(|it| (it, "hi")) else { panic!() };
+
+let () = (t1, t2, t3, t4).extend_mut(|it: &'static mut (u8, u8, u8, u8)| it);
+let () = (&mut t1, &mut t2, &mut t3, &mut t4).extend_mut(|it: (&mut u8, &mut u8, &mut u8, &mut u8)| it);
+let "hi" = (t1, t2, t3, t4).extend_mut(|it| (it, "hi")) else { panic!() };
+let "hi" = (&mut t1, &mut t2, &mut t3, &mut t4).extend_mut(|it| (it, "hi")) else { panic!() };
+
+let () = <_>::extend_mut(&mut (t1, t2, t3, t4), |it: &'static mut (u8, u8, u8, u8)| it);
+let () = <_>::extend_mut((&mut t1, &mut t2, &mut t3, &mut t4), |it| it);
+```
 
 ## Why Use `extend_mut`?
 
@@ -47,7 +85,7 @@ linker-allocated region.
 - `#![no_std]` support: This crate is compatible with `#![no_std]` environments,
   making it suitable for embedded and constrained systems.
 
-### Synchronous Example
+## Synchronous Example
 
 ```rust
 use extend_mut::extend_mut;
@@ -71,6 +109,30 @@ fn main() {
     assert_eq!(result, 42);
     assert_eq!(x, 8);
 }
+```
+
+## Asynchronous Example
+
+```rust
+use core::pin::pin;
+use core::task::{Context, Poll, Waker};
+
+let mut x = 5;
+async fn want_static(x: &'static mut i32) -> &'static mut i32 {
+    assert_eq!(*x, 5);
+    x
+}
+
+let fut = unsafe { extend_mut_async(&mut x, async |x| (want_static(x).await, 8)) };
+let mut fut = pin!(fut);
+let ret = loop {
+    match fut.as_mut().poll(&mut Context::from_waker(&Waker::noop())) {
+        Poll::Ready(ret) => break ret,
+        Poll::Pending => unreachable!(), // `want_static` will not return pending
+    }
+};
+
+assert_eq!(ret, 8);
 ```
 
 ## Safety Considerations
