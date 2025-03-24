@@ -1,4 +1,5 @@
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
+#![feature(async_fn_traits)]
 
 /*!
 
@@ -14,6 +15,7 @@ a linear type be safe - but Rust does not have linear types yet, so it is unsafe
 
 use core::{
     future::Future,
+    marker::PhantomData,
     pin::Pin,
     ptr,
     task::{Context, Poll},
@@ -41,6 +43,11 @@ pub trait ExtendMut<'b>: Sized {
         self,
         f: impl FnOnce(Self::Extended) -> ER,
     ) -> R;
+    #[cfg(feature = "assume-non-forget")]
+    fn extend_mut_async<R, ER: IntoExtendMutReturn<Self::Extended, R>>(
+        self,
+        f: impl AsyncFnOnce(Self::Extended) -> ER,
+    ) -> impl Future<Output = R>;
 }
 
 /// Trait designed to allow returning both `&mut T` and `(&mut T, R)`, as well
@@ -125,16 +132,18 @@ where
 pin_project_lite::pin_project! {
     /// Future returned by returned by [extend_mut_async].
     /// Consult it's documentation for more information and safety requirements.
-    pub struct ExtendMutFuture<'b, T, Fut, R, ExtR> {
+    /// `'a` is to hold smaller borrow.
+    /// `'b` is to enforce that larger borrow is returned.
+    pub struct ExtendMutFuture<'a, 'b, T, Fut, R, ExtR> {
         ptr: *mut T,
-        marker: core::marker::PhantomData<(&'b mut T, R, ExtR)>,
+        marker: PhantomData<(&'a mut T, &'b mut T, R, ExtR)>,
         #[pin]
         future: Fut,
         // Instead of having that bool, we might make `ptr` null.
         ready: bool,
     }
 
-    impl<'b, T, Fut, R, ExtR> PinnedDrop for ExtendMutFuture<'b, T, Fut, R, ExtR> {
+    impl<'a, 'b, T, Fut, R, ExtR> PinnedDrop for ExtendMutFuture<'a, 'b, T, Fut, R, ExtR> {
         fn drop(this: Pin<&mut Self>) {
             if !*this.project().ready {
                 abort_no_unwind("Cannot drop ExtendMutFuture before it yields Poll::Ready");
@@ -143,7 +152,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'b, T, Fut, R, ExdR> Future for ExtendMutFuture<'b, T, Fut, R, ExdR>
+impl<'a, 'b, T, Fut, R, ExdR> Future for ExtendMutFuture<'a, 'b, T, Fut, R, ExdR>
 where
     ExdR: IntoExtendMutReturn<&'b mut T, R>,
     Fut: Future<Output = ExdR>,
@@ -194,14 +203,38 @@ where
 /// by any means, including [forget](core::mem::forget), [`ManuallyDrop`](core::mem::ManuallyDrop) etc. Otherwise,
 /// borrow checker will allow you to use `mut_ref` while it might be used by `f`, which will
 /// be undefined behavior.
-pub unsafe fn extend_mut_async<'a, 'b, T: 'b, F, Fut, R, ExdR>(
+#[cfg(not(feature = "assume-non-forget"))]
+pub unsafe fn extend_mut_async<'a, 'b, T: 'b, F, R, ExdR>(
     mut_ref: &'a mut T,
     f: F,
-) -> ExtendMutFuture<'b, T, Fut, R, ExdR>
+) -> ExtendMutFuture<'a, 'b, T, F::CallOnceFuture, R, ExdR>
 where
     ExdR: IntoExtendMutReturn<&'b mut T, R>,
-    Fut: Future<Output = ExdR>,
-    F: FnOnce(&'b mut T) -> Fut,
+    F: AsyncFnOnce(&'b mut T) -> ExdR,
+{
+    unsafe { extend_mut_async_inner(mut_ref, f) }
+}
+
+/// Async version of [`extend_mut`].
+#[cfg(feature = "assume-non-forget")]
+pub fn extend_mut_async<'a, 'b, T: 'b, F, R, ExdR>(
+    mut_ref: &'a mut T,
+    f: F,
+) -> ExtendMutFuture<'a, 'b, T, F::CallOnceFuture, R, ExdR>
+where
+    ExdR: IntoExtendMutReturn<&'b mut T, R>,
+    F: AsyncFnOnce(&'b mut T) -> ExdR,
+{
+    unsafe { extend_mut_async_inner(mut_ref, f) }
+}
+
+unsafe fn extend_mut_async_inner<'a, 'b, T: 'b, F, R, ExdR>(
+    mut_ref: &'a mut T,
+    f: F,
+) -> ExtendMutFuture<'a, 'b, T, F::CallOnceFuture, R, ExdR>
+where
+    ExdR: IntoExtendMutReturn<&'b mut T, R>,
+    F: AsyncFnOnce(&'b mut T) -> ExdR,
 {
     const { assert!(size_of::<T>() != 0) };
 
@@ -210,7 +243,7 @@ where
 
     ExtendMutFuture {
         ptr,
-        marker: core::marker::PhantomData,
+        marker: PhantomData,
         future,
         ready: false,
     }
@@ -331,14 +364,16 @@ mod test {
             x
         }
 
-        let fut = unsafe { extend_mut_async(&mut x, async |x| want_static(x).await) };
-        let mut fut = pin!(fut);
-        () = loop {
-            match fut.as_mut().poll(&mut Context::from_waker(&Waker::noop())) {
-                Poll::Ready(ret) => break ret,
-                Poll::Pending => continue,
-            }
-        };
+        {
+            let fut = unsafe { extend_mut_async(&mut x, async |x| want_static(x).await) };
+            let mut fut = pin!(fut);
+            () = loop {
+                match fut.as_mut().poll(&mut Context::from_waker(&Waker::noop())) {
+                    Poll::Ready(ret) => break ret,
+                    Poll::Pending => continue,
+                }
+            };
+        }
 
         assert_eq!(x, 26);
     }
