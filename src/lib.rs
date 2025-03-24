@@ -1,4 +1,5 @@
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
+#![recursion_limit = "512"]
 #![feature(async_fn_traits)]
 
 /*!
