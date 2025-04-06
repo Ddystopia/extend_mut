@@ -6,7 +6,10 @@ IntoExtendMutReturn:
 No impl for IntoExtendMutReturn<(&mut T, &mut T), ()>
 */
 
-use crate::{extend_mut, extend_mut_async, ExtendMut, IntoExtendMutReturn};
+use crate::{extend_mut, ExtendMut, IntoExtendMutReturn};
+
+#[cfg(feature = "assume-non-forget")]
+use crate::extend_mut_async;
 
 // #![feature(generic_const_exprs)]
 // trait NotZst: Sized {}
@@ -14,13 +17,13 @@ use crate::{extend_mut, extend_mut_async, ExtendMut, IntoExtendMutReturn};
 
 macro_rules! impl_into_extend_mut {
     (unit: $head:ident,) => {
-        unsafe impl<'a, $head> IntoExtendMutReturn<(&'a mut $head,), ()> for (&'a mut $head,) {
+        unsafe impl<'a, $head: ?Sized> IntoExtendMutReturn<(&'a mut $head,), ()> for (&'a mut $head,) {
             #[inline(always)]
             fn into_extend_mut_return(self) -> ((&'a mut $head,), ()) { (self, ()) }
         }
     };
     (unit: $head:ident, $($param:ident,)*) => {
-        unsafe impl<'a, $head, $($param,)*> IntoExtendMutReturn<(&'a mut $head, $(&'a mut $param,)*), ()>
+        unsafe impl<'a, $head: ?Sized, $($param,)*> IntoExtendMutReturn<(&'a mut $head, $(&'a mut $param,)*), ()>
             for (&'a mut $head, $(&'a mut $param,)*)
         {
             #[inline(always)]
@@ -29,13 +32,13 @@ macro_rules! impl_into_extend_mut {
         impl_into_extend_mut!(unit: $($param,)*);
     };
     (any: $head:ident,) => {
-        unsafe impl<'a, $head, R> IntoExtendMutReturn<(&'a mut $head,), R> for ((&'a mut $head,), R) {
+        unsafe impl<'a, $head: ?Sized, R> IntoExtendMutReturn<(&'a mut $head,), R> for ((&'a mut $head,), R) {
             #[inline(always)]
             fn into_extend_mut_return(self) -> ((&'a mut $head,), R) { self }
         }
     };
     (any: $head:ident, $($param:ident,)*) => {
-        unsafe impl<'a, $head, $($param,)* R> IntoExtendMutReturn<(&'a mut $head, $(&'a mut $param,)*), R>
+        unsafe impl<'a, $head: ?Sized, $($param: ?Sized,)* R> IntoExtendMutReturn<(&'a mut $head, $(&'a mut $param,)*), R>
             for ((&'a mut $head, $(&'a mut $param,)*), R)
         {
             #[inline(always)]
@@ -48,7 +51,7 @@ macro_rules! impl_into_extend_mut {
 macro_rules! impl_extend_mut_many {
     ($head:ident,) => {
         #[allow(non_snake_case)]
-        impl<'a, 'b, $head: 'b> ExtendMut<'b> for (&'a mut $head,) {
+        impl<'a, 'b, $head: ?Sized + 'b> ExtendMut<'b> for (&'a mut $head,) {
             type Extended = (&'b mut $head,);
             #[inline(always)]
             fn extend_mut<R, ER: IntoExtendMutReturn<Self::Extended, R>>(
@@ -75,7 +78,7 @@ macro_rules! impl_extend_mut_many {
     };
     ($head:ident, $($param:ident,)*) => {
         #[allow(non_snake_case)]
-        impl <'a, 'b, $head: 'b, $($param: 'b,)*> ExtendMut<'b> for (&'a mut $head, $(&'a mut $param,)*) {
+        impl <'a, 'b, $head: ?Sized + 'b, $($param: ?Sized + 'b,)*> ExtendMut<'b> for (&'a mut $head, $(&'a mut $param,)*) {
             type Extended = (&'b mut $head, $(&'b mut $param,)*);
             #[inline(always)]
             fn extend_mut<R, ER: IntoExtendMutReturn<Self::Extended, R>>( self, f: impl FnOnce(Self::Extended) -> ER,) -> R {
@@ -103,14 +106,14 @@ macro_rules! impl_extend_mut_many {
     };
 }
 
-unsafe impl<'a, T, R> IntoExtendMutReturn<&'a mut T, R> for (&'a mut T, R) {
+unsafe impl<'a, T: ?Sized, R> IntoExtendMutReturn<&'a mut T, R> for (&'a mut T, R) {
     #[inline(always)]
     fn into_extend_mut_return(self) -> (&'a mut T, R) {
         self
     }
 }
 
-unsafe impl<'a, T> IntoExtendMutReturn<&'a mut T, ()> for &'a mut T {
+unsafe impl<'a, T: ?Sized> IntoExtendMutReturn<&'a mut T, ()> for &'a mut T {
     #[inline(always)]
     fn into_extend_mut_return(self) -> (&'a mut T, ()) {
         (self, ())
@@ -120,7 +123,7 @@ unsafe impl<'a, T> IntoExtendMutReturn<&'a mut T, ()> for &'a mut T {
 impl_into_extend_mut!(any: T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13,);
 impl_into_extend_mut!(unit: T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13,);
 
-impl<'a, 'b, T: 'b> ExtendMut<'b> for &'a mut T {
+impl<'a, 'b, T: ?Sized + 'b> ExtendMut<'b> for &'a mut T {
     type Extended = &'b mut T;
     #[inline(always)]
     fn extend_mut<R, ER: IntoExtendMutReturn<Self::Extended, R>>(

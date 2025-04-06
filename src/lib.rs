@@ -110,12 +110,12 @@ fn extend_mut_proof_for_smaller<'a: 'b, 'b, T: 'b, R>(
 /// assert_eq!(x, 8);
 /// ```
 #[inline(always)]
-pub fn extend_mut<'a, 'b, T: 'b, F, R, ExtR>(mut_ref: &'a mut T, f: F) -> R
+pub fn extend_mut<'a, 'b, T: ?Sized + 'b, F, R, ExtR>(mut_ref: &'a mut T, f: F) -> R
 where
     F: FnOnce(&'b mut T) -> ExtR,
     ExtR: IntoExtendMutReturn<&'b mut T, R>,
 {
-    const { assert!(size_of::<T>() != 0) };
+    assert!(size_of_val::<T>(&*mut_ref) != 0);
 
     let ptr = ptr::from_mut(mut_ref);
     let ret = abort_on_unwind(
@@ -123,7 +123,9 @@ where
         move || f(unsafe { &mut *ptr }),
     );
     let (extended, next) = ret.into_extend_mut_return();
-    if ptr != ptr::from_mut(extended) {
+
+    // We are checking both address and metadata, because for slices one might make a split.
+    if !core::ptr::eq(ptr, ptr::from_mut(extended)) {
         abort_no_unwind("ExtendMut: Pointer changed");
     }
 
@@ -135,7 +137,7 @@ pin_project_lite::pin_project! {
     /// Consult it's documentation for more information and safety requirements.
     /// `'a` is to hold smaller borrow.
     /// `'b` is to enforce that larger borrow is returned.
-    pub struct ExtendMutFuture<'a, 'b, T, Fut, R, ExtR> {
+    pub struct ExtendMutFuture<'a, 'b, T: ?Sized, Fut, R, ExtR> {
         ptr: *mut T,
         marker: PhantomData<(&'a mut T, &'b mut T, R, ExtR)>,
         #[pin]
@@ -144,7 +146,7 @@ pin_project_lite::pin_project! {
         ready: bool,
     }
 
-    impl<'a, 'b, T, Fut, R, ExtR> PinnedDrop for ExtendMutFuture<'a, 'b, T, Fut, R, ExtR> {
+    impl<'a, 'b, T: ?Sized, Fut, R, ExtR> PinnedDrop for ExtendMutFuture<'a, 'b, T, Fut, R, ExtR> {
         fn drop(this: Pin<&mut Self>) {
             if !*this.project().ready {
                 abort_no_unwind("Cannot drop ExtendMutFuture before it yields Poll::Ready");
@@ -155,6 +157,7 @@ pin_project_lite::pin_project! {
 
 impl<'a, 'b, T, Fut, R, ExdR> Future for ExtendMutFuture<'a, 'b, T, Fut, R, ExdR>
 where
+    T: ?Sized,
     ExdR: IntoExtendMutReturn<&'b mut T, R>,
     Fut: Future<Output = ExdR>,
 {
@@ -176,7 +179,7 @@ where
             Poll::Ready(ret) => {
                 let (extended, ret) = ret.into_extend_mut_return();
 
-                if ptr == ptr::from_mut(extended) {
+                if core::ptr::eq(ptr, ptr::from_mut(extended)) {
                     *this.ready = true;
                     Poll::Ready(ret)
                 } else {
@@ -218,7 +221,7 @@ where
 
 /// Async version of [`extend_mut`].
 #[cfg(feature = "assume-non-forget")]
-pub fn extend_mut_async<'a, 'b, T: 'b, F, R, ExdR>(
+pub fn extend_mut_async<'a, 'b, T: ?Sized + 'b, F, R, ExdR>(
     mut_ref: &'a mut T,
     f: F,
 ) -> ExtendMutFuture<'a, 'b, T, F::CallOnceFuture, R, ExdR>
@@ -229,7 +232,7 @@ where
     unsafe { extend_mut_async_inner(mut_ref, f) }
 }
 
-unsafe fn extend_mut_async_inner<'a, 'b, T: 'b, F, R, ExdR>(
+unsafe fn extend_mut_async_inner<'a, 'b, T: ?Sized + 'b, F, R, ExdR>(
     mut_ref: &'a mut T,
     f: F,
 ) -> ExtendMutFuture<'a, 'b, T, F::CallOnceFuture, R, ExdR>
@@ -237,7 +240,7 @@ where
     ExdR: IntoExtendMutReturn<&'b mut T, R>,
     F: AsyncFnOnce(&'b mut T) -> ExdR,
 {
-    const { assert!(size_of::<T>() != 0) };
+    assert!(size_of_val::<T>(&*mut_ref) != 0);
 
     let ptr = ptr::from_mut(mut_ref);
     let future = f(unsafe { &mut *ptr });
