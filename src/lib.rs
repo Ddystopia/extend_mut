@@ -1,6 +1,6 @@
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 #![recursion_limit = "512"]
-#![feature(async_fn_traits)]
+#![cfg_attr(feature = "async", feature(async_fn_traits))]
 
 /*!
 
@@ -14,11 +14,13 @@ a linear type be safe - but Rust does not have linear types yet, so it is unsafe
 
 */
 
+use core::ptr;
+
+#[cfg(feature = "async")]
 use core::{
     future::Future,
     marker::PhantomData,
     pin::Pin,
-    ptr,
     task::{Context, Poll},
 };
 
@@ -132,6 +134,7 @@ where
     next
 }
 
+#[cfg(feature = "async")]
 pin_project_lite::pin_project! {
     /// Future returned by returned by [extend_mut_async].
     /// Consult it's documentation for more information and safety requirements.
@@ -155,6 +158,7 @@ pin_project_lite::pin_project! {
     }
 }
 
+#[cfg(feature = "async")]
 impl<'a, 'b, T, Fut, R, ExdR> Future for ExtendMutFuture<'a, 'b, T, Fut, R, ExdR>
 where
     T: ?Sized,
@@ -207,6 +211,7 @@ where
 /// by any means, including [forget](core::mem::forget), [`ManuallyDrop`](core::mem::ManuallyDrop) etc. Otherwise,
 /// borrow checker will allow you to use `mut_ref` while it might be used by `f`, which will
 /// be undefined behavior.
+#[cfg(feature = "async")]
 #[cfg(not(feature = "assume-non-forget"))]
 pub unsafe fn extend_mut_async<'a, 'b, T: 'b, F, R, ExdR>(
     mut_ref: &'a mut T,
@@ -220,6 +225,7 @@ where
 }
 
 /// Async version of [`extend_mut`].
+#[cfg(feature = "async")]
 #[cfg(feature = "assume-non-forget")]
 pub fn extend_mut_async<'a, 'b, T: ?Sized + 'b, F, R, ExdR>(
     mut_ref: &'a mut T,
@@ -232,6 +238,7 @@ where
     unsafe { extend_mut_async_inner(mut_ref, f) }
 }
 
+#[cfg(feature = "async")]
 unsafe fn extend_mut_async_inner<'a, 'b, T: ?Sized + 'b, F, R, ExdR>(
     mut_ref: &'a mut T,
     f: F,
@@ -319,6 +326,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "async")]
     fn test_extend_mut_async_immediate() {
         use core::pin::pin;
         use core::task::{Context, Poll, Waker};
@@ -342,6 +350,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "async")]
     fn test_extend_mut_async_yielding() {
         use core::pin::pin;
         use core::task::{Context, Poll, Waker};

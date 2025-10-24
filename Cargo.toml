@@ -16,3 +16,4 @@ pin-project-lite = "0.2.16"
 default = ["std"]
 std = []
 assume-non-forget = []
+async = []
