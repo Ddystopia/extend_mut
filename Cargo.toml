@@ -1,6 +1,6 @@
 [package]
 name = "extend_mut"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 description = "A library for extending exclusive references."
 documentation = "https://docs.rs/extend_mut"
