@@ -56,7 +56,24 @@ pub fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
 pub fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(ret) => ret,
-        // fixme: how can we print error? It is just `Box<dyn Any + Send>`.
-        Err(_err) => abort_no_unwind("ExtendMut: Function cannot unwind"),
+        Err(err) => {
+            let string = if let Some(s) = err.downcast_ref::<&'static str>() {
+                s
+            } else if let Some(s) = err.downcast_ref::<String>() {
+                s
+            } else {
+                ""
+            };
+
+            let _ = std::panic::catch_unwind(|| {
+                if string.is_empty() {
+                    eprintln!("ExtendMut: Function cannot unwind");
+                } else {
+                    eprintln!("ExtendMut: Function cannot unwind, but panicked with message: {string}");
+                }
+            });
+
+            std::process::abort();
+        }
     }
 }
