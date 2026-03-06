@@ -6,7 +6,7 @@ IntoExtendMutReturn:
 No impl for IntoExtendMutReturn<(&mut T, &mut T), ()>
 */
 
-use crate::{extend_mut, ExtendMut, IntoExtendMutReturn};
+use crate::{ExtendMut, IntoExtendMutReturn, extend_mut};
 
 #[cfg(feature = "assume-non-forget")]
 use crate::extend_mut_async;

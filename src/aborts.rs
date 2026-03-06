@@ -57,7 +57,7 @@ pub fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(ret) => ret,
         Err(err) => {
-            let string = if let Some(s) = err.downcast_ref::<&'static str>() {
+            let s = if let Some(s) = err.downcast_ref::<&'static str>() {
                 s
             } else if let Some(s) = err.downcast_ref::<String>() {
                 s
@@ -66,10 +66,10 @@ pub fn abort_on_unwind<T>(f: impl FnOnce() -> T) -> T {
             };
 
             let _ = std::panic::catch_unwind(|| {
-                if string.is_empty() {
+                if s.is_empty() {
                     eprintln!("ExtendMut: Function cannot unwind");
                 } else {
-                    eprintln!("ExtendMut: Function cannot unwind, but panicked with message: {string}");
+                    eprintln!("ExtendMut: Function cannot unwind, but panicked with message: {s}");
                 }
             });
 
