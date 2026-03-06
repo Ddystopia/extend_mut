@@ -21,7 +21,8 @@ pub fn abort_no_unwind(msg: &'static str) -> ! {
 #[cfg(feature = "std")]
 #[inline(always)]
 pub fn abort_no_unwind(msg: &'static str) -> ! {
-    eprintln!("{}", msg);
+    // Thanks to @robofinch for pointing out that `eprintln!` can unwind.
+    let _ = std::panic::catch_unwind(|| eprintln!("{msg}"));
     std::process::abort();
 }
 
